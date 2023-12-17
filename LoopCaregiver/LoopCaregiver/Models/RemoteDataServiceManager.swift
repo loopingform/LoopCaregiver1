@@ -19,13 +19,13 @@ class RemoteDataServiceManager: ObservableObject, RemoteDataServiceProvider {
     @Published var carbEntries: [CarbCorrectionNightscoutTreatment] = []
     @Published var bolusEntries: [BolusNightscoutTreatment] = []
     @Published var basalEntries: [TempBasalNightscoutTreatment] = []
-    @Published var overrideEntries: [OverrideTreatment] = []
+    @Published var overridePresets: [OverrideTreatment] = []
     @Published var latestDeviceStatus: DeviceStatus? = nil
     @Published var recommendedBolus: Double? = nil
     @Published var currentIOB: IOBStatus? = nil
     @Published var currentCOB: COBStatus? = nil
     @Published var currentProfile: ProfileSet?
-    @Published var recentCommands: [NSRemoteCommandPayload] = []
+    @Published var recentCommands: [RemoteCommand] = []
     @Published var updating: Bool = false
     
     private let remoteDataProvider: RemoteDataServiceProvider
@@ -33,21 +33,24 @@ class RemoteDataServiceManager: ObservableObject, RemoteDataServiceProvider {
     
     init(remoteDataProvider: RemoteDataServiceProvider){
         self.remoteDataProvider = remoteDataProvider
-        monitorForUpdates(updateInterval: 30)
-    }
-    
-    func monitorForUpdates(updateInterval: TimeInterval) {
-        self.dateUpdateTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true, block: { timer in
-            Task {
-                await self.updateData()
-            }
-        })
         
         Task {
             await self.updateData()
         }
         
-        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
+        monitorForUpdates(updateInterval: 30)
+    }
+    
+    func monitorForUpdates(updateInterval: TimeInterval) {
+        self.dateUpdateTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true, block: { [weak self] timer in
+            guard let self else { return }
+            Task {
+                await self.updateData()
+            }
+        })
+        
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
             Task {
                 await self.updateData()
             }
@@ -74,7 +77,7 @@ class RemoteDataServiceManager: ObservableObject, RemoteDataServiceProvider {
             async let carbEntriesAsync = remoteDataProvider.fetchCarbEntries()
             async let bolusEntriesAsync = remoteDataProvider.fetchBolusEntries()
             async let basalEntriesAsync = remoteDataProvider.fetchBasalEntries()
-            async let overrideEntriesAsync = remoteDataProvider.fetchOverrideEntries()
+            async let overridePresetsAsync = remoteDataProvider.fetchOverridePresets()
             async let deviceStatusAsync = remoteDataProvider.fetchLatestDeviceStatus()
             async let recentCommandsAsync = remoteDataProvider.fetchRecentCommands()
             async let curentProfileAsync = remoteDataProvider.fetchCurrentProfile()
@@ -94,9 +97,9 @@ class RemoteDataServiceManager: ObservableObject, RemoteDataServiceProvider {
                 self.basalEntries = basalEntries
             }
             
-            let overrideEntries = try await overrideEntriesAsync
-            if overrideEntries != self.overrideEntries {
-                self.overrideEntries = overrideEntries
+            let overridePresets = try await overridePresetsAsync
+            if overridePresets != self.overridePresets {
+                self.overridePresets = overridePresets
             }
             
             if let deviceStatus = try await deviceStatusAsync {
@@ -237,8 +240,8 @@ class RemoteDataServiceManager: ObservableObject, RemoteDataServiceProvider {
         return try await remoteDataProvider.fetchCarbEntries()
     }
     
-    func fetchOverrideEntries() async throws -> [NightscoutKit.OverrideTreatment] {
-        return try await remoteDataProvider.fetchOverrideEntries()
+    func fetchOverridePresets() async throws -> [NightscoutKit.OverrideTreatment] {
+        return try await remoteDataProvider.fetchOverridePresets()
     }
     
     func fetchLatestDeviceStatus() async throws -> DeviceStatus? {
@@ -315,7 +318,7 @@ class RemoteDataServiceManager: ObservableObject, RemoteDataServiceProvider {
         return override
     }
     
-    func fetchRecentCommands() async throws -> [NSRemoteCommandPayload] {
+    func fetchRecentCommands() async throws -> [RemoteCommand] {
         return try await remoteDataProvider.fetchRecentCommands()
     }
     
@@ -331,7 +334,7 @@ protocol RemoteDataServiceProvider {
     func fetchBolusEntries() async throws -> [BolusNightscoutTreatment]
     func fetchBasalEntries() async throws -> [TempBasalNightscoutTreatment]
     func fetchCarbEntries() async throws -> [CarbCorrectionNightscoutTreatment]
-    func fetchOverrideEntries() async throws -> [OverrideTreatment]
+    func fetchOverridePresets() async throws -> [OverrideTreatment]
     func fetchLatestDeviceStatus() async throws -> DeviceStatus?
     func deliverCarbs(amountInGrams: Double, absorptionTime: TimeInterval, consumedDate: Date) async throws
     func deliverBolus(amountInUnits: Double) async throws
@@ -340,6 +343,6 @@ protocol RemoteDataServiceProvider {
     func activateAutobolus(activate: Bool) async throws
     func activateClosedLoop(activate: Bool) async throws
     func fetchCurrentProfile() async throws -> ProfileSet
-    func fetchRecentCommands() async throws -> [NSRemoteCommandPayload]
+    func fetchRecentCommands() async throws -> [RemoteCommand]
     func deleteAllCommands() async throws
 }
