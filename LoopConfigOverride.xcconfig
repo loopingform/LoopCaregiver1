@@ -11,6 +11,7 @@ SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) SIMULATORS_ENABLED //DEBUG_FE
 
 // Put your team id here for signing
 //LOOP_DEVELOPMENT_TEAM = UY678SP37Q
+LOOP_DEVELOPMENT_TEAM = CGJ34L8YGW 
 
 //You can optionally add a configuration file like this, 1 directory above this file.
 //That will allow you to override congfiguration without changing your repository code here.
