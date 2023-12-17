@@ -54,7 +54,7 @@ class AccountServiceManager: ObservableObject, AccountServiceDelegate, AccountSe
     func createLooperService(looper: Looper, settings: CaregiverSettings) -> LooperService {
         let remoteDataSource = RemoteDataServiceManager(remoteDataProvider: NightscoutDataSource(looper: looper, settings: settings))
         return LooperService(looper: looper,
-                             accountService: self,
+                                              accountService: self,
                              remoteDataSource: remoteDataSource,
                              settings: settings
         )
@@ -89,26 +89,16 @@ class AccountServiceManager: ObservableObject, AccountServiceDelegate, AccountSe
 }
 
 extension AccountServiceManager {
-    
-    //For debugging, this uses a local file on your mac to populate a user on an iPhone Simulator
     func simulatorCredentials() -> NightscoutCredentials? {
         
-        //The NSSearchPathForDirectoriesInDomains only returns the Desktop path in the
-        //app container, not the mac. So this must be hardcoded to your local file.
-        let jsonFileURL = URL(filePath: "/Users/bill/Desktop/Loop/loopcaregiver-test.json")
+        let fileURL = URL(filePath: "/Users/bill/Desktop/Loop/loopcaregiver-test.json")
         
-        guard FileManager.default.fileExists(atPath: jsonFileURL.path) else {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return nil
         }
         
-        guard let data = try? Data(contentsOf: jsonFileURL) else {
-            return nil
-        }
-        
-        guard let credentials = try? JSONDecoder().decode(NightscoutCredentials.self, from: data) else {
-            return nil
-        }
-        
+        let data = try! Data(contentsOf: fileURL)
+        let credentials = try! JSONDecoder().decode(NightscoutCredentials.self, from: data)
         return NightscoutCredentials(url: credentials.url.absoluteURL, secretKey: credentials.secretKey, otpURL: credentials.otpURL)
     }
 }

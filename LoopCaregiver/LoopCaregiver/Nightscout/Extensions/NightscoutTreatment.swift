@@ -48,11 +48,21 @@ extension [NightscoutTreatment] {
             }
         }
     }
-
-    func noteTreatments() -> [NoteNightscoutTreatment] {
+    
+    func pumpSuspendTreatments() -> [PumpSuspendTreatment] {
         return self.compactMap { treatment in
-            if let note = treatment as? NoteNightscoutTreatment {
-                return note
+            if let suspend = treatment as? PumpSuspendTreatment {
+                return suspend
+            } else {
+                return nil
+            }
+        }
+    }
+    
+    func pumpResumeTreatments() -> [PumpResumeTreatment] {
+        return self.compactMap { treatment in
+            if let resume = treatment as? PumpResumeTreatment {
+                return resume
             } else {
                 return nil
             }

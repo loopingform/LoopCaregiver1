@@ -14,17 +14,11 @@ class NightscoutDataSource: ObservableObject, RemoteDataServiceProvider {
     private var credentialService: NightscoutCredentialService
     private let nightscoutUploader: NightscoutClient
     private let settings: CaregiverSettings
-    private let treatmentsFetcher: NightscoutTreatmentFetcher
     
     init(looper: Looper, settings: CaregiverSettings){
         self.nightscoutUploader = NightscoutClient(siteURL: looper.nightscoutCredentials.url, apiSecret: looper.nightscoutCredentials.secretKey)
         self.credentialService = NightscoutCredentialService(credentials: looper.nightscoutCredentials)
         self.settings = settings
-        self.treatmentsFetcher = NightscoutTreatmentFetcher(nightscoutClient: self.nightscoutUploader,
-                                                           fetchLookbackInterval: Self.fetchLookbackInterval(),
-                                                           fetchLookAheadInterval: Self.fetchLookAheadInterval(),
-                                                           maxFetchCount: Self.maxFetchCount()
-        )
     }
     
     
@@ -42,23 +36,23 @@ class NightscoutDataSource: ObservableObject, RemoteDataServiceProvider {
     }
     
     func fetchBasalEntries() async throws -> [TempBasalNightscoutTreatment] {
-        return try await treatmentsFetcher.fetchBasalEntries()
+        return try await fetchTreatments()
+            .basalTreatments()
     }
     
     func fetchBolusEntries() async throws -> [BolusNightscoutTreatment] {
-        return try await treatmentsFetcher.fetchBolusEntries()
+        return try await fetchTreatments()
+            .bolusTreatments()
     }
     
     func fetchCarbEntries() async throws -> [CarbCorrectionNightscoutTreatment] {
-        return try await treatmentsFetcher.fetchCarbEntries()
+        return try await fetchTreatments()
+            .carbTreatments()
     }
     
-    func fetchOverridePresets() async throws -> [OverrideTreatment] {
-        return try await treatmentsFetcher.fetchOverridePresets()
-    }
-
-    func fetchNotes() async throws -> [NoteNightscoutTreatment] {
-        return try await treatmentsFetcher.fetchNotes()
+    func fetchOverrideEntries() async throws -> [OverrideTreatment] {
+        return try await fetchTreatments()
+            .overrideTreatments()
     }
     
     func fetchLatestDeviceStatus() async throws -> DeviceStatus? {
@@ -72,20 +66,23 @@ class NightscoutDataSource: ObservableObject, RemoteDataServiceProvider {
         return result.last
     }
     
-    func fetchStartDate() -> Date {
-        return nowDate().addingTimeInterval(Self.fetchLookbackInterval())
+    func fetchTreatments() async throws -> [NightscoutTreatment] {
+        let maxCount = maxFetchCount()
+        let result = try await withCheckedThrowingContinuation({ continuation in
+            nightscoutUploader.fetchTreatments(dateInterval: fetchInterval(), maxCount: maxCount) { result in
+                continuation.resume(with: result)
+            }
+        })
+        assert(result.count < maxCount, "Hit max count: Consider increasing")
+        return result
     }
     
-    static func fetchLookbackInterval() -> TimeInterval {
-        return -60 * 60 * 24 * 1
+    func fetchStartDate() -> Date {
+        return nowDate().addingTimeInterval(-60 * 60 * 24 * 1)
     }
     
     func fetchEndDate() -> Date {
-        return nowDate().addingTimeInterval(Self.fetchLookAheadInterval())
-    }
-    
-    static func fetchLookAheadInterval() -> TimeInterval {
-        return 60 * 60
+        return nowDate().addingTimeInterval(60 * 60)
     }
     
     func fetchInterval() -> DateInterval {
@@ -93,11 +90,7 @@ class NightscoutDataSource: ObservableObject, RemoteDataServiceProvider {
     }
     
     func maxFetchCount() -> Int {
-        return Self.maxFetchCount()
-    }
-    
-    static func maxFetchCount() -> Int {
-        let seconds = abs(Self.fetchLookbackInterval()) + abs(Self.fetchLookbackInterval())
+        let seconds = fetchEndDate().timeIntervalSince(fetchStartDate())
         let minutes = seconds / 60
         // Assume up to 2 entries every 1 minute.
         // We tried 1 entry per 5 minutes for bg, mulitplied by a factor for 2,
@@ -189,12 +182,11 @@ class NightscoutDataSource: ObservableObject, RemoteDataServiceProvider {
         return NSRemoteCommandPayload(version: "2.0", createdDate: Date(), action: action, sendNotification: true, status: .init(state: .Pending, message: ""), otp: credentialService.otpCode)
     }
     
-    func fetchRecentCommands() async throws -> [RemoteCommand] {
+    func fetchRecentCommands() async throws -> [NSRemoteCommandPayload] {
         if settings.remoteCommands2Enabled {
-            return try await nightscoutUploader.fetchRemoteCommands(earliestDate: fetchInterval().start, commandState: nil).compactMap({try? $0.toRemoteCommand()})
+            return try await nightscoutUploader.fetchRemoteCommands(earliestDate: fetchInterval().start, commandState: nil)
         } else {
-            return try await fetchNotes()
-                .compactMap({$0.toRemoteCommand()})
+            return []
         }
     }
     
@@ -204,125 +196,5 @@ class NightscoutDataSource: ObservableObject, RemoteDataServiceProvider {
         } else {
             assertionFailure("Remote 2.0 commands are not enabled.")
         }
-    }
-}
-
-actor NightscoutTreatmentFetcher {
-    
-    private weak var nightscoutClient: NightscoutClient?
-    private var lastTreatmentFetch: (fetchDate: Date, treatments: [NightscoutTreatment])? = nil
-    private var fetchTaskInProgress: Task<[NightscoutTreatment], Error>? = nil
-    private let fetchLookbackInterval: TimeInterval
-    private let fetchLookAheadInterval: TimeInterval
-    private let maxFetchCount: Int
-
-    init(nightscoutClient: NightscoutClient,
-         fetchLookbackInterval: TimeInterval,
-         fetchLookAheadInterval: TimeInterval,
-         maxFetchCount: Int
-    ) {
-        self.nightscoutClient = nightscoutClient
-        self.fetchLookbackInterval = fetchLookbackInterval
-        self.fetchLookAheadInterval = fetchLookAheadInterval
-        self.maxFetchCount = maxFetchCount
-    }
-    
-    func fetchBasalEntries() async throws -> [TempBasalNightscoutTreatment] {
-        return try await fetchTreatments()
-            .basalTreatments()
-    }
-    
-    func fetchBolusEntries() async throws -> [BolusNightscoutTreatment] {
-        return try await fetchTreatments()
-            .bolusTreatments()
-    }
-    
-    func fetchCarbEntries() async throws -> [CarbCorrectionNightscoutTreatment] {
-        return try await fetchTreatments()
-            .carbTreatments()
-    }
-    
-    func fetchOverridePresets() async throws -> [OverrideTreatment] {
-        return try await fetchTreatments()
-            .overrideTreatments()
-    }
-    
-    func fetchNotes() async throws -> [NoteNightscoutTreatment] {
-        return try await fetchTreatments()
-            .noteTreatments()
-    }
-
-    func fetchTreatments() async throws -> [NightscoutTreatment] {
-        if let ongoingFetch = fetchTaskInProgress {
-            return try await ongoingFetch.value
-        } else if let validCachedTreatments = getValidCachedTreatments() {
-            return validCachedTreatments
-        } else {
-            let task = Task { [self] in
-                do {
-                    let treatments = try await fetchTreatmentsNoCache()
-                    fetchTaskInProgress = nil
-                    lastTreatmentFetch = (fetchDate: Date(), treatments: treatments)
-                    return treatments
-                } catch {
-                    fetchTaskInProgress = nil
-                    throw error
-                }
-            }
-            fetchTaskInProgress = task
-            let treatments = try await task.value
-            storeCachedTreatments(treatments: treatments)
-            return treatments
-        }
-    }
-    
-    func fetchTreatmentsNoCache() async throws -> [NightscoutTreatment] {
-        guard let nightscoutClient = self.nightscoutClient else {return []}
-        let result = try await withCheckedThrowingContinuation({ continuation in
-            nightscoutClient.fetchTreatments(dateInterval: fetchInterval(), maxCount: maxFetchCount) { result in
-                continuation.resume(with: result)
-            }
-        })
-
-        return result
-    }
-
-    
-    private func storeCachedTreatments(treatments: [NightscoutTreatment]) {
-        lastTreatmentFetch = (fetchDate: Date(), treatments: treatments)
-    }
-    
-    private func getValidCachedTreatments() -> [NightscoutTreatment]? {
-        guard let lastTreatmentFetch = lastTreatmentFetch else {
-            return nil
-        }
-        
-        let now = nowDate()
-        
-        guard lastTreatmentFetch.fetchDate <= now else {
-            return nil //Future date - invalid
-        }
-        
-        guard lastTreatmentFetch.fetchDate >= now.addingTimeInterval(-15) else {
-            return nil
-        }
-        
-        return lastTreatmentFetch.treatments
-    }
-    
-    private func nowDate() -> Date {
-        return Date()
-    }
-    
-    private func fetchStartDate() -> Date {
-        return nowDate().addingTimeInterval(fetchLookbackInterval)
-    }
-    
-    func fetchEndDate() -> Date {
-        return nowDate().addingTimeInterval(fetchLookAheadInterval)
-    }
-    
-    func fetchInterval() -> DateInterval {
-        return DateInterval(start: fetchStartDate(), end: fetchEndDate())
     }
 }

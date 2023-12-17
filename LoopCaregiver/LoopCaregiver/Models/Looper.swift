@@ -33,8 +33,6 @@ class Looper: ObservableObject, Hashable {
     //MARK: Equatable
     
     static func == (lhs: Looper, rhs: Looper) -> Bool {
-        //TODO: Equality should check other properties
-        //See note in HUDViewModel.selectedLooper
         return lhs.identifier == rhs.identifier
     }
     
