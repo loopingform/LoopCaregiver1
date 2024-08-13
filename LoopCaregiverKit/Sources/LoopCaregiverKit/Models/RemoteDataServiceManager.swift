@@ -9,7 +9,6 @@ import Foundation
 import HealthKit
 import LoopKit
 import NightscoutKit
-import UIKit // For willEnterForegroundNotification
 
 public class RemoteDataServiceManager: ObservableObject {
     @Published public var currentGlucoseSample: NewGlucoseSample?
@@ -46,15 +45,6 @@ public class RemoteDataServiceManager: ObservableObject {
                 await self.updateData()
             }
         })
-        
-#if os(iOS)
-        foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            Task {
-                await self.updateData()
-            }
-        }
-#endif
     }
     
     @MainActor
@@ -99,12 +89,12 @@ public class RemoteDataServiceManager: ObservableObject {
             print("Error fetching data: \(error)")
         }
         
-        updating = false
         self.refreshCalculatedData()
+        updating = false
     }
     
     @MainActor
-    private func updateGlucoseData()async throws {
+    private func updateGlucoseData() async throws {
         let glucoseSamplesAsync = try await remoteDataProvider.fetchGlucoseSamples()
             .sorted(by: { $0.date < $1.date })
         
@@ -126,7 +116,7 @@ public class RemoteDataServiceManager: ObservableObject {
     }
     
     @MainActor
-    private func updateBolusData()async throws {
+    private func updateBolusData() async throws {
         let bolusEntries = try await remoteDataProvider.fetchBolusEntries()
         if bolusEntries != self.bolusEntries {
             self.bolusEntries = bolusEntries
@@ -134,7 +124,7 @@ public class RemoteDataServiceManager: ObservableObject {
     }
     
     @MainActor
-    private func updateBasalData()async throws {
+    private func updateBasalData() async throws {
         let basalEntries = try await remoteDataProvider.fetchBasalEntries()
         if basalEntries != self.basalEntries {
             self.basalEntries = basalEntries
@@ -142,7 +132,7 @@ public class RemoteDataServiceManager: ObservableObject {
     }
     
     @MainActor
-    private func updateOverrideData()async throws {
+    private func updateOverrideData() async throws {
         let overridePresets = try await remoteDataProvider.fetchOverridePresets()
         if overridePresets != self.overridePresets {
             self.overridePresets = overridePresets
@@ -150,7 +140,7 @@ public class RemoteDataServiceManager: ObservableObject {
     }
     
     @MainActor
-    private func updateDeviceStatusData()async throws {
+    private func updateDeviceStatusData() async throws {
         if let deviceStatus = try await remoteDataProvider.fetchLatestDeviceStatus() {
             if latestDeviceStatus?.timestamp != deviceStatus.timestamp {
                 self.latestDeviceStatus = deviceStatus
@@ -191,16 +181,11 @@ public class RemoteDataServiceManager: ObservableObject {
     
     @MainActor
     private func refreshCalculatedData() {
-        guard let updatedRecomendedBolus = calculateValidRecommendedBolus() else {
-            self.recommendedBolus = nil
-            return
-        }
+        let updatedRecomendedBolus = calculateValidRecommendedBolus()
         
-        guard self.recommendedBolus != updatedRecomendedBolus else {
-            return
+        if self.recommendedBolus != updatedRecomendedBolus {
+            self.recommendedBolus = updatedRecomendedBolus
         }
-        
-        self.recommendedBolus = updatedRecomendedBolus
     }
     
     private func calculateValidRecommendedBolus() -> Double? {
@@ -237,7 +222,6 @@ public class RemoteDataServiceManager: ObservableObject {
         }
         
         let predictedValues = loopPrediction.values
-        
         var predictedSamples = [NewGlucoseSample]()
         var currDate = loopPrediction.startDate
         let intervalBetweenPredictedValues = 60.0 * 5.0
@@ -250,7 +234,7 @@ public class RemoteDataServiceManager: ObservableObject {
                                                    isDisplayOnly: false,
                                                    wasUserEntered: false,
                                                    // TODO: Probably needs to be something unique from NS predicted data
-                                                   syncIdentifier: UUID().uuidString)
+                                                   syncIdentifier: currDate.toUUID().uuidString)
             
             predictedSamples.append(predictedSample)
             currDate = currDate.addingTimeInterval(intervalBetweenPredictedValues)
@@ -291,7 +275,17 @@ public class RemoteDataServiceManager: ObservableObject {
         try await remoteDataProvider.activateClosedLoop(activate: activate)
     }
     
+    public func fetchActiveOverrideStatus() async throws -> (override: NightscoutKit.TemporaryScheduleOverride, status: NightscoutKit.OverrideStatus)? {
+        let latestDeviceStatus = try await remoteDataProvider.fetchLatestDeviceStatus()
+        let currentProfile = try await remoteDataProvider.fetchCurrentProfile()
+        return activeOverrideAndStatus(latestDeviceStatus: latestDeviceStatus, currentProfile: currentProfile)
+    }
+    
     public func activeOverrideAndStatus() -> (override: NightscoutKit.TemporaryScheduleOverride, status: NightscoutKit.OverrideStatus)? {
+        return activeOverrideAndStatus(latestDeviceStatus: latestDeviceStatus, currentProfile: currentProfile)
+    }
+    
+    private func activeOverrideAndStatus(latestDeviceStatus: DeviceStatus?, currentProfile: ProfileSet?) -> (override: NightscoutKit.TemporaryScheduleOverride, status: NightscoutKit.OverrideStatus)? {
         /*
          There are 3 sources of the current override from Nightscout
          1. Devicestatus.overrideStatus: Used by NS Plugin (bubble view)
@@ -339,5 +333,43 @@ public class RemoteDataServiceManager: ObservableObject {
     
     public func deleteAllCommands() async throws {
         try await remoteDataProvider.deleteAllCommands()
+    }
+}
+
+extension Date {
+    func toUUID() -> UUID {
+        // Convert the date to a string format
+        let dateString = ISO8601DateFormatter().string(from: self)
+        
+        // Hash the date string to produce a consistent value
+        let hash = dateString.hash
+        
+        // Create an array to hold the UUID bytes
+        var uuidBytes: [UInt8] = Array(repeating: 0, count: 16)
+        
+        // Fill the array with the hash value
+        uuidBytes[0] = UInt8((hash >> 24) & 0xFF)
+        uuidBytes[1] = UInt8((hash >> 16) & 0xFF)
+        uuidBytes[2] = UInt8((hash >> 8) & 0xFF)
+        uuidBytes[3] = UInt8(hash & 0xFF)
+        
+        // Use additional bytes for more uniqueness
+        uuidBytes[4] = UInt8(((hash &* 31) >> 24) & 0xFF)
+        uuidBytes[5] = UInt8(((hash &* 31) >> 16) & 0xFF)
+        uuidBytes[6] = UInt8(((hash &* 31) >> 8) & 0xFF)
+        uuidBytes[7] = UInt8((hash &* 31) & 0xFF)
+        
+        // Fill the remaining bytes with a consistent pattern or more derived values
+        for index in 8..<16 {
+            uuidBytes[index] = UInt8((hash &* (index + 1)) & 0xFF)
+        }
+        
+        // Create UUID from the array
+        return UUID(uuid: (
+            uuidBytes[0], uuidBytes[1], uuidBytes[2], uuidBytes[3],
+            uuidBytes[4], uuidBytes[5], uuidBytes[6], uuidBytes[7],
+            uuidBytes[8], uuidBytes[9], uuidBytes[10], uuidBytes[11],
+            uuidBytes[12], uuidBytes[13], uuidBytes[14], uuidBytes[15]
+        ))
     }
 }
